@@ -14,28 +14,77 @@ void freerange(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
-struct run {
+struct run
+{
   struct run *next;
 };
 
-struct {
+struct
+{
   struct spinlock lock;
   struct run *freelist;
+  int refcount[(PHYSTOP - KERNBASE) / PGSIZE]; // 각 물리 페이지마다 count
 } kmem;
 
-void
-kinit()
+// 해당 페이지의 refcount 1 증가
+void add_count(uint64 pa)
 {
-  initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  acquire(&kmem.lock);
+
+  if ((uint64)pa >= PHYSTOP || (uint64)pa < KERNBASE)
+    panic("add_count: invalid pa");
+
+  uint64 idx = ((uint64)pa - KERNBASE) / PGSIZE;
+  ++kmem.refcount[idx];
+  release(&kmem.lock);
 }
 
-void
-freerange(void *pa_start, void *pa_end)
+// 해당 페이지의 refcount 1 감소
+void sub_count(uint64 pa)
+{
+  acquire(&kmem.lock);
+  if ((uint64)pa >= PHYSTOP || (uint64)pa < KERNBASE)
+    panic("sub_count: invalid pa");
+
+  uint64 idx = ((uint64)pa - KERNBASE) / PGSIZE;
+  if (kmem.refcount[idx] <= 0)
+    panic("refcount가 0인데 sub_count 시도");
+  else
+  {
+    --kmem.refcount[idx];
+    if (kmem.refcount[idx] == 0)
+    {
+      // refcount가 0이 되면 기존 kfree로직
+      memset((void *)pa, 1, PGSIZE); // Fill with junk to catch dangling refs.
+      struct run *r = (struct run *)pa;
+      r->next = kmem.freelist;
+      kmem.freelist = r;
+    }
+
+    // refcount가 1이 되면 cow bit 해제, write 가능
+    else if (kmem.refcount[idx] == 1)
+    {
+      uint64 pte = PA2PTE(pa);
+      // cow bit 해제
+      pte &= ~PTE_RSW;
+      // write 권한 설정
+      pte |= PTE_W;
+    }
+  }
+  release(&kmem.lock);
+}
+
+void kinit()
+{
+  initlock(&kmem.lock, "kmem");
+  freerange(end, (void *)PHYSTOP);
+}
+
+void freerange(void *pa_start, void *pa_end)
 {
   char *p;
-  p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  p = (char *)PGROUNDUP((uint64)pa_start);
+  for (; p + PGSIZE <= (char *)pa_end; p += PGSIZE)
     kfree(p);
 }
 
@@ -43,23 +92,9 @@ freerange(void *pa_start, void *pa_end)
 // which normally should have been returned by a
 // call to kalloc().  (The exception is when
 // initializing the allocator; see kinit above.)
-void
-kfree(void *pa)
+void kfree(void *pa)
 {
-  struct run *r;
-
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
-    panic("kfree");
-
-  // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
-
-  r = (struct run*)pa;
-
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  sub_count((uint64)pa); // refcount 감소
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -72,11 +107,17 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if (r)
+  {
     kmem.freelist = r->next;
+    uint64 idx = ((uint64)r - KERNBASE) / PGSIZE;
+    if (kmem.refcount[idx] != 0)
+      panic("kalloc: page from freelist has non-zero ref_count");
+    kmem.refcount[idx] = 1; // 처음 할당되면 count는 1로 초기화
+  }
   release(&kmem.lock);
 
-  if(r)
-    memset((char*)r, 5, PGSIZE); // fill with junk
-  return (void*)r;
+  if (r)
+    memset((char *)r, 5, PGSIZE); // fill with junk
+  return (void *)r;
 }
