@@ -62,6 +62,8 @@ void threetest()
     printf("three: ");
 
     char *p = sbrk(sz);
+    printf("sbrk(%d) = %p\n", sz, p);
+
     if (p == (char *)0xffffffffffffffffL)
     {
         printf("sbrk(%d) failed\n", sz);
@@ -69,6 +71,7 @@ void threetest()
     }
 
     pid1 = fork(); // fork
+    printf("fork() = %d\n", pid1);
     if (pid1 < 0)
     {
         printf("fork failed\n");
@@ -203,6 +206,7 @@ void filetest()
 
 int main(int argc, char *argv[])
 {
+    printf("COW TESTS STARTED\n");
     simpletest();
 
     // check that the first simpletest() freed the physical memory.

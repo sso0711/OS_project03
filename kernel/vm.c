@@ -342,41 +342,12 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     {
       goto err;
     }
-
-    add_count(pa); // 물리 페이지의 refcount 증가
   }
   return 0;
 
 err:
-  *pte = PA2PTE(pa) | flags; // 부모 PTE를 원상복구
   printf("uvmcopy: failed mappages\n");
-
-  for (int j = 0; j < i; j += PGSIZE)
-  {
-    pte_t *pte_child = walk(new, j, 0);
-    pte_t *pte_parent = walk(old, j, 0);
-    uint64 pa_mapped = 0;
-
-    // 자식 페이지 테이블에서 매핑 해제 , 참조 카운트 감소
-    if (pte_child && (*pte_child & PTE_V))
-    {
-      pa_mapped = PTE2PA(*pte_child); // 자식 매핑에서 물리 주소 가져오기
-      uvmunmap(new, j, 1, 0);         // 자식 매핑 해제 (do_free=0)
-      sub_count(pa_mapped);           // 물리 페이지 참조 카운트 감소
-    }
-
-    if (pte_parent && (*pte_parent & PTE_V))
-    {
-      if (*pte_parent & PTE_RSW)
-      { // 이 함수에 의해 COW로 설정되었다면
-        uint64 pa_parent_j = PTE2PA(*pte_parent);
-        uint current_parent_flags_j = PTE_FLAGS(*pte_parent);
-        // COW 비트 해제, 쓰기 권한 설정 (원래 쓰기 가능했다고 가정)
-        // 다른 플래그(V, U, R, X 등)는 유지
-        *pte_parent = PA2PTE(pa_parent_j) | ((current_parent_flags_j & ~PTE_RSW) | PTE_W);
-      }
-    }
-  }
+  *pte = PA2PTE(pa) | flags; // 부모 PTE를 원상복구
 
   return -1;
 }
@@ -396,7 +367,7 @@ void uvmclear(pagetable_t pagetable, uint64 va)
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
-int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
+int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len, int is_cow)
 {
   uint64 n, va0, pa0;
   pte_t *pte;
@@ -407,8 +378,9 @@ int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   pte = walk(pagetable, va0, 0);
 
   // cow page fault에 의해 copyout이 호출된 경우
-  if (dstva >= KERNBASE)
+  if (is_cow == 1)
   {
+    printf("copyout: cow page fault at dstva 0x%lx\n", dstva);
     // dstva에는 page fault가 발생한 va
     // src에는 kalloc이 반환한 포인터(새 페이지가 시작하는 곳 가리킴)
     pa0 = PTE2PA(*pte);

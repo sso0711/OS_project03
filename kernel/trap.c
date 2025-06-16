@@ -76,10 +76,20 @@ void usertrap(void)
     uint64 va = r_stval();                  // page fault를 발생시킨 virtual address를 가져온다.
     pte_t *pte = walk(p->pagetable, va, 0); // 해당 va의 PTE를 가져온다.
 
-    if (*pte & PTE_RSW) // cow page fault인 경우
+    // printf("usertrap(): scause 15 at va 0x%lx pid=%d\n", va, p->pid);
+
+    if (pte == 0 || !(*pte & PTE_V) || !(*pte & PTE_U))
     {
+      // 잘못된 페이지에 대한 폴트
+      printf("usertrap(): Store/AMO page fault on non-user or non-valid page. va=0x%lx, pte_val=0x%lx, pid=%d\n", va, (pte ? *pte : 0), p->pid);
+      setkilled(p);
+    }
+
+    if (!(*pte & PTE_W) && (*pte & PTE_RSW)) // cow page fault인 경우
+    {
+      printf("usertrap(): CoW page fault at va 0x%lx pid=%d\n", va, p->pid);
       void *mem = kalloc(); // 수정된 내용을 저장할 새로운 페이지 할당
-      copyout(p->pagetable, va, (char *)mem, PGSIZE);
+      copyout(p->pagetable, va, (char *)mem, PGSIZE, 1);
     }
     else
     {
