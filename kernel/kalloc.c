@@ -27,7 +27,7 @@ struct
 } kmem;
 
 // 해당 페이지의 refcount 1 증가
-void add_count(uint64 pa)
+void add_count(void *pa)
 {
 
   if ((uint64)pa >= PHYSTOP || (uint64)pa < KERNBASE)
@@ -47,12 +47,11 @@ void add_count(uint64 pa)
 }
 
 // 해당 페이지의 refcount 1 감소
-void sub_count(uint64 pa)
+void sub_count(void *pa)
 {
   if ((uint64)pa >= PHYSTOP || (uint64)pa < KERNBASE)
     panic("sub_count: invalid pa");
 
-  // printf("acquire: sub_count\n");
   acquire(&kmem.lock);
   uint64 idx = ((uint64)pa - KERNBASE) / PGSIZE;
   if (kmem.refcount[idx] <= 0)
@@ -62,21 +61,17 @@ void sub_count(uint64 pa)
     --kmem.refcount[idx];
     if (kmem.refcount[idx] == 0)
     {
-      // refcount가 0이 되면 기존 kfree로직
-      memset((void *)pa, 1, PGSIZE); // Fill with junk to catch dangling refs.
+      memset(pa, 1, PGSIZE); // Fill with junk to catch dangling refs.
       struct run *r = (struct run *)pa;
       r->next = kmem.freelist;
       kmem.freelist = r;
     }
-
-    // refcount가 1이 되면 cow bit 해제, write 가능
     else if (kmem.refcount[idx] == 1)
     {
-      uint64 pte = PA2PTE(pa);
-      // cow bit 해제
+      uint64 pte = PA2PTE((uint64)pa);
       pte &= ~PTE_RSW;
-      // write 권한 설정
       pte |= PTE_W;
+      sfence_vma();
     }
   }
   release(&kmem.lock);
@@ -127,7 +122,7 @@ void freerange(void *pa_start, void *pa_end)
 // initializing the allocator; see kinit above.)
 void kfree(void *pa)
 {
-  sub_count((uint64)pa); // refcount 감소
+  sub_count((void *)pa); // refcount 감소
 }
 
 // Allocate one 4096-byte page of physical memory.

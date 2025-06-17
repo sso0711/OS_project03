@@ -87,7 +87,7 @@ void usertrap(void)
 
     if (!(*pte & PTE_W) && (*pte & PTE_RSW)) // cow page fault인 경우
     {
-      printf("usertrap(): CoW page fault at va 0x%lx pid=%d\n", va, p->pid);
+      // printf("usertrap(): CoW page fault at va 0x%lx pid=%d\n", va, p->pid);
       void *mem = kalloc(); // 수정된 내용을 저장할 새로운 페이지 할당
       copyout(p->pagetable, va, (char *)mem, PGSIZE, 1);
     }

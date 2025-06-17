@@ -17,6 +17,8 @@ void simpletest()
     printf("simple: ");
 
     char *p = sbrk(sz); // 메모리 절반 이상 할당
+    // printf("sbrk(%d) = %p\n", sz, p);
+
     if (p == (char *)0xffffffffffffffffL)
     {
         printf("sbrk(%d) failed\n", sz);
@@ -62,7 +64,7 @@ void threetest()
     printf("three: ");
 
     char *p = sbrk(sz);
-    printf("sbrk(%d) = %p\n", sz, p);
+    // printf("sbrk(%d) = %p\n", sz, p);
 
     if (p == (char *)0xffffffffffffffffL)
     {
@@ -71,7 +73,8 @@ void threetest()
     }
 
     pid1 = fork(); // fork
-    printf("fork() = %d\n", pid1);
+    // printf("fork() = %d\n", pid1);
+
     if (pid1 < 0)
     {
         printf("fork failed\n");

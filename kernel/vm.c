@@ -342,6 +342,9 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     {
       goto err;
     }
+
+    sfence_vma();          // TLB flush
+    add_count((void *)pa); // 물리 페이지의 참조 카운트 증가
   }
   return 0;
 
@@ -380,19 +383,20 @@ int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len, int is_c
   // cow page fault에 의해 copyout이 호출된 경우
   if (is_cow == 1)
   {
-    printf("copyout: cow page fault at dstva 0x%lx\n", dstva);
+    // printf("copyout: cow page fault at dstva 0x%lx\n", dstva);
     // dstva에는 page fault가 발생한 va
     // src에는 kalloc이 반환한 포인터(새 페이지가 시작하는 주소)
     pa0 = PTE2PA(*pte);
     memmove(src, (void *)pa0, len); // 새페이지(src)에 기존 페이지(pa0) 복사
 
+    // PTE를 새 페이지로 업데이트
     // 새로 할당받은 페이지에는 쓰기 가능, COW 비트는 해제
     *pte = PA2PTE((uint64)src) | (PTE_FLAGS(*pte) & ~PTE_RSW) | PTE_W | PTE_V | PTE_U;
 
-    sfence_vma();   // TLB flush
-    sub_count(pa0); // 물리 페이지의 참조 카운트 감소
+    sfence_vma();           // TLB flush
+    sub_count((void *)pa0); // 물리 페이지의 참조 카운트 감소
 
-    printf("copyout: cow page fault handled, dstva=0x%lx, src=0x%lx\n", dstva, (uint64)src);
+    // printf("copyout: cow page fault handled, dstva=0x%lx, src=0x%lx\n", dstva, (uint64)src);
   }
   // 원래의 copyout 함수
   else
