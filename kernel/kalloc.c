@@ -40,7 +40,7 @@ void add_count(void *pa)
   if (kmem.refcount[idx] == 0)
   {
     release(&kmem.lock);
-    panic("add_count: incrementing ref_count of a free page or page not yet set to 1 by kalloc");
+    panic("add_count: free page의 ref count 증가 시도");
   }
   ++kmem.refcount[idx];
   release(&kmem.lock);
@@ -61,7 +61,7 @@ void sub_count(void *pa)
     --kmem.refcount[idx];
     if (kmem.refcount[idx] == 0)
     {
-      memset(pa, 1, PGSIZE); // Fill with junk to catch dangling refs.
+      memset(pa, 1, PGSIZE);
       struct run *r = (struct run *)pa;
       r->next = kmem.freelist;
       kmem.freelist = r;
@@ -71,7 +71,7 @@ void sub_count(void *pa)
       uint64 pte = PA2PTE((uint64)pa);
       pte &= ~PTE_RSW;
       pte |= PTE_W;
-      sfence_vma();
+      sfence_vma(); // TLB flush
     }
   }
   release(&kmem.lock);
@@ -81,6 +81,7 @@ void kinit()
 {
   initlock(&kmem.lock, "kmem");
   acquire(&kmem.lock);
+
   // 참조 카운트 배열 초기화
   for (uint i = 0; i < ((PHYSTOP - KERNBASE) / PGSIZE); i++)
   {

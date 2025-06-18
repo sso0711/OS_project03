@@ -199,6 +199,10 @@ sys_unlink(void)
   char name[DIRSIZ], path[MAXPATH];
   uint off;
 
+  path[MAXPATH - 1] = 0;
+
+  // printf("unlink %s called by pid %d\n", path, myproc()->pid);
+
   if (argstr(0, path, MAXPATH) < 0)
     return -1;
 
@@ -323,13 +327,13 @@ sys_open(void)
   struct inode *ip;
   int n;
 
-  argint(1, &omode);
-  if ((n = argstr(0, path, MAXPATH)) < 0)
+  argint(1, &omode);                      // 두번째 인자 = 열기 모드
+  if ((n = argstr(0, path, MAXPATH)) < 0) // 첫번째 인자는 path 버퍼에
     return -1;
 
-  begin_op();
+  begin_op(); // 트랜잭션 시작
 
-  if (omode & O_CREATE)
+  if (omode & O_CREATE) // 새 파일 생성
   {
     ip = create(path, T_FILE, 0, 0);
     if (ip == 0)
@@ -338,15 +342,16 @@ sys_open(void)
       return -1;
     }
   }
-  else
+  else // O_CREATE 없는 경우
   {
-    if ((ip = namei(path)) == 0)
+
+    if ((ip = namei(path)) == 0) // path에 해당하는 inode 검색
     {
       end_op();
       return -1;
     }
-    ilock(ip);
-    if (ip->type == T_DIR && omode != O_RDONLY)
+    ilock(ip);                                  // inode 잠금
+    if (ip->type == T_DIR && omode != O_RDONLY) // 디렉토리 타입을 쓰기 모드로 열려고 함
     {
       iunlockput(ip);
       end_op();
@@ -354,6 +359,66 @@ sys_open(void)
     }
   }
 
+  int depth = 0;
+  char target[MAXPATH];
+
+  // T_SYMLINK 타입인 경우
+  if (ip->type == T_SYMLINK)
+  {
+
+    // O_NOFOLLOW 플래그가 있으면
+    if (omode & O_NOFOLLOW)
+    {
+      goto nofollow;
+    }
+
+    // O_NOFOLLOW 플래그가 없으면 symlink 따라가기
+    while (depth < 10)
+    {
+      int r;
+      struct inode *ips[10];
+
+      if ((r = readi(ip, 0, (uint64)target, 0, MAXPATH - 1)) <= 0)
+      {
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+      target[r] = 0; // 문자 깨짐 방지
+      iunlockput(ip);
+
+      // target에 해당하는 inode 찾기
+      if ((ip = namei(target)) == 0)
+      {
+        end_op(); // 깨진 링크일 경우 예외 처리
+        return -1;
+      }
+
+      ilock(ip);
+
+      // ips배열을 돌며 이전 방문 여부 확인
+      for (int i = 0; i < depth; i++)
+      {
+        if (ips[i] == ip) // cycle 발생
+        {
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+      }
+
+      // 타겟 파일을 찾음
+      if (ip->type != T_SYMLINK)
+      {
+        break;
+      }
+      depth++;
+    }
+  }
+
+nofollow:
+
+  // 디바이스파일 유효성 검사
   if (ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV))
   {
     iunlockput(ip);
@@ -361,15 +426,17 @@ sys_open(void)
     return -1;
   }
 
+  // 파일 구조체 , 파일 디스크립터 할당
   if ((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0)
   {
     if (f)
       fileclose(f);
-    iunlockput(ip);
+    iunlockput(ip); // inode 잠금 해제
     end_op();
     return -1;
   }
 
+  // 파일 구조체 초기화
   if (ip->type == T_DEVICE)
   {
     f->type = FD_DEVICE;
@@ -384,6 +451,7 @@ sys_open(void)
   f->readable = !(omode & O_WRONLY);
   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
 
+  // 파일내용 비우기
   if ((omode & O_TRUNC) && ip->type == T_FILE)
   {
     itrunc(ip);
@@ -393,6 +461,106 @@ sys_open(void)
   end_op();
 
   return fd;
+}
+
+uint64
+sys_symlink(void)
+{
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip, *dp;
+  char name[DIRSIZ];
+
+  // printf("symlink %s -> %s called by pid %d\n", path, target, myproc()->pid);
+
+  if (argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  target[MAXPATH - 1] = 0; // 문자 깨짐 방지
+  path[MAXPATH - 1] = 0;   // 문자 깨짐 방지
+
+  begin_op();
+
+  // 경로의 부모 디렉토리 얻기
+  if ((dp = nameiparent(path, name)) == 0)
+  {
+    end_op();
+    return -1;
+  }
+
+  ilock(dp);
+
+  // 이미 파일이 있는지 확인
+  if ((ip = dirlookup(dp, name, 0)) != 0)
+  {
+    // 존재하는 파일 발견
+    ilock(ip);
+    if ((ip->type == T_FILE || ip->type == T_DEVICE))
+    {
+      // 기존 파일이 파일 또는 디바이스 파일이면
+      goto nalloc;
+    }
+    // symlink 타입이면 링크 실패
+    iunlockput(ip);
+    iunlockput(dp);
+    end_op();
+    return -1;
+  }
+
+  // symlink를 위한 새 inode 할당
+  if ((ip = ialloc(dp->dev, T_SYMLINK)) == 0)
+  {
+    ip->nlink = 0;
+    iupdate(ip);
+    iunlockput(dp);
+    end_op();
+    return -1;
+  }
+
+  ilock(ip);
+  ip->major = 0;
+  ip->minor = 0;
+  ip->nlink = 1;
+  iupdate(ip);
+
+  // 디렉토리에 링크 추가
+  // printf("ialloc inum=%d for %s\n", ip->inum, path);
+  if (dirlink(dp, name, ip->inum) < 0)
+  {
+    printf("dirlink failed for %s, freeing inum=%d\n", path, ip->inum);
+    // inode 해제
+    ip->nlink = 0;
+    itrunc(ip); // 파일 내용 비우기
+    iupdate(ip);
+    iunlockput(ip);
+    iunlockput(dp);
+    end_op();
+    return -1;
+  }
+
+nalloc:
+  // 타겟 경로 쓰기
+  int target_len = strlen(target);
+  if (writei(ip, 0, (uint64)target, 0, target_len) != target_len)
+  {
+    // 실패 시 정리
+    // itrunc(ip); // 파일 내용 비우기
+    if (ip->type != T_FILE || ip->type != T_DEVICE)
+    {
+      ip->nlink = 0;
+      iupdate(ip);
+    }
+    iunlockput(ip);
+    iunlockput(dp);
+    end_op();
+    return -1;
+  }
+
+  // 정상적으로 모든 잠금 해제
+  iunlockput(dp);
+  iunlockput(ip);
+  end_op();
+
+  return 0;
 }
 
 uint64
@@ -407,6 +575,7 @@ sys_mkdir(void)
     end_op();
     return -1;
   }
+
   iunlockput(ip);
   end_op();
   return 0;
