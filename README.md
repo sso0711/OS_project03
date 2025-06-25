@@ -1,32 +1,26 @@
-## Repository Naming Convention
+# 1. Copy-on-Write Fork
 
-```
-project03-XXXXXXXXXX
-```
+기존의 fork()는 즉시 부모의 메모리를 복사하기 때문에 exec()까지의 과정에서 메모리를 비효율적으로 사용하게 된다.
 
-- **XXXXXXXXXX**: Student ID number
+따라서  다음과 같은 CoW(Copy-on-Write)를 구현해야 한다.
 
-### Example
+- 부모와 자식이 페이지를 공유한다.
+- 자식이 수정되면 페이지를 복사한다.
 
-- Student ID: 2025123456
+Design
 
-**Repository Name:**
+fork 과정에서 uvmcopy를 통해 부모 프로세스의 페이지테이블과 물리 메모리를 자식 프로세스에게 똑같이 복사하는데, 이 함수를 수정해 복사가 아닌 페이지를 공유하도록 해야했다.
 
-```
-project03-2025123456
-```
+처음 고민과 의문이 들었던 점과 해결과정은 다음과 같았다.
 
-Failure to follow this naming convention will result in a score of **0 (zero points)**.
-
----
-
-## Late Submissions
-
-Late submissions will be accepted with a **50% penalty** for **one day** only after the deadline. Late submissions must be sent via **email to the TAs**. Any submission after the extended one-day period will **NOT** be accepted and will receive a **score of 0**.
-
----
-
-If you have any questions, please contact the TA.
-
-- 성준모 (wnsah814@hanyang.ac.kr)
-- 허건 (hgun1207@hanyang.ac.kr)
+1. 쓰기 시도를 할 때 page fault가 남으로써 새 페이지로 복사가 이루어져야 하는데, 어떻게 page fault로 인식시킬 것인가?
+    - 쓰기 시도 중 page fault가 발생하면 scause레지스터에 15가 담긴다는 것을 찾아내었다. 따라서 usertrap함수에서 r_cause()==15인 경우의 분기를 추가하여 핸들러를 구현하기로했다.
+2. flag의 RSW bit를 CoW bit로 사용한다고 했는데, 이 bit의 용도는 무엇인가?
+    - 이는 1번에서부터 이어지는데, r_cause()가 15인 경우는 cow page fault 뿐만 아니라 쓰기 권한을 위배한 일반적인 상황에서도 발생할 수 있다. 이를 어떻게 구분할지 고민하는 과정에서, 바로 이 CoW bit로 구분하는 것임을 깨달아 1번과 2번 문제가 같이 해결되었다.
+3. page마다 reference count를 관리해야 하는데 어떤 자료구조로 어디에 구현해야 하는가
+    
+    ![image.png](attachment:588b52ad-352d-4162-b178-e7758aa2f70f:image.png)
+    
+    - xv6에는 page의 메타데이터를 관리하는 자료구조가 따로 없으므로, 전체 물리 페이지 갯수 크기의 reference  count배열을 따로 만들었다.
+    - 물리 주소에 대응하는 페이지 번호(refcount배열의 인덱스)를 구하는 과정이 필요하다.
+    - 특정 페이지의 count가 변경되는 와중에 context switch가 발생하면 안되므로, kmem.lock을 먼저 획득해야 한다.
