@@ -19,7 +19,8 @@ fork 과정에서 uvmcopy를 통해 부모 프로세스의 페이지테이블과
     - 이는 1번에서부터 이어지는데, r_cause()가 15인 경우는 cow page fault 뿐만 아니라 쓰기 권한을 위배한 일반적인 상황에서도 발생할 수 있다. 이를 어떻게 구분할지 고민하는 과정에서, 바로 이 CoW bit로 구분하는 것임을 깨달아 1번과 2번 문제가 같이 해결되었다.
 3. page마다 reference count를 관리해야 하는데 어떤 자료구조로 어디에 구현해야 하는가
     
-    ![image.png](attachment:588b52ad-352d-4162-b178-e7758aa2f70f:image.png)
+    ![image](https://github.com/user-attachments/assets/c75815c7-8ca2-4327-aee8-de577ebaad7f)
+
     
     - xv6에는 page의 메타데이터를 관리하는 자료구조가 따로 없으므로, 전체 물리 페이지 갯수 크기의 reference  count배열을 따로 만들었다.
     - 물리 주소에 대응하는 페이지 번호(refcount배열의 인덱스)를 구하는 과정이 필요하다.
